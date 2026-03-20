@@ -3,14 +3,24 @@
 A lazygit-style TUI for managing init system services.
 
 ```
-┌─ services ──────────┬─ logs: sshd ─────────────────┐
-│ ● acpid      running│ 2026-03-20 ...                │
-│ ● dbus       running│ 2026-03-20 ...                │
-│ ▶ sshd       running│ 2026-03-20 ...                │
-│ ● docker     running│                               │
-│ ● earlyoom     down │                               │
-└─────────────────────┴───────────────────────────────┘
+╭─ detail ────────────╮╭─ logs: sshd ────────────────╮
+│ Name:    sshd        ││ 2026-03-20 ...              │
+│ Status:  running     ││ 2026-03-20 ...              │
+│ Enabled: yes         ││ 2026-03-20 ...              │
+│ PID:     763         ││                             │
+│ Uptime:  52m 30s     ││                             │
+│ Command: /usr/bin/.. ││                             │
+╰──────────────────────╯│                             │
+╭─ services ───────────╮│                             │
+│ sshd                 ││                             │
+│ docker               ││                             │
+│ earlyoom             ││                             │
+│ ...                  ││                             │
+╰──────────────────────╯╰─────────────────────────────╯
+ j/k navigate  g/G top/bottom  enter logs  tab switch panel  q quit
 ```
+
+Services are colored by status: green (running), red (down), dim (disabled).
 
 ## Build
 
@@ -32,23 +42,56 @@ Root is required to read service status and control services.
 
 ## Key Bindings
 
+### Services panel
+
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Cursor down |
-| `k` / `↑` | Cursor up |
+| `j` / `↓` | Cursor down (cyclic) |
+| `k` / `↑` | Cursor up (cyclic) |
+| `g` | Go to first service |
+| `G` | Go to last service |
 | `enter` | Load logs for selected service |
 | `s` | Start service |
 | `x` | Stop service |
+| `e` | Enable service (start on boot) |
+| `d` | Disable service |
+
+### Logs panel
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Scroll down |
+| `k` / `↑` | Scroll up |
+| `g` | Go to top |
+| `G` | Go to bottom |
+
+### Global
+
+| Key | Action |
+|-----|--------|
 | `tab` | Switch panel focus |
-| `pgup` / `pgdn` | Scroll logs |
 | `q` / `ctrl+c` | Quit |
+
+## Detail Panel
+
+The detail panel shows information about the selected service:
+
+- **Name** - service name
+- **Status** - current state (running, down, disabled, etc.)
+- **Enabled** - whether the service starts on boot
+- **PID** - process ID (when running)
+- **Uptime** - how long the service has been running
+- **Command** - the command the service executes
+- **Info** - additional state (e.g. log process info, want state)
+
+The service list and detail panel auto-refresh every 2 seconds. Logs live-tail when scrolled to the bottom.
 
 ## Supported Init Systems
 
-- **runit** — reads from `/var/service`, uses `sv` for control
-- **systemd** — uses `systemctl` and `journalctl`
+- **runit** - reads from `/etc/sv` (available) and `/var/service` (enabled), uses `sv` for control
+- **systemd** - uses `systemctl` and `journalctl`
 
-Adding a new init system:
+### Adding a new init system
 
-1. Create `adapter/<name>/manager.go` implementing `core.ServiceManager`
-2. Create `cmd/lazy-init/<name>.go` with a build tag providing `newManager()`
+1. Create `adapter/<name>/manager.go` with a build tag, implementing `core.ServiceManager`
+2. Create `cmd/lazy-init/<name>.go` with the same build tag, providing `newManager()`
