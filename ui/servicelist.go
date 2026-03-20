@@ -8,10 +8,12 @@ import (
 )
 
 var (
-	statusRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	statusDown    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	statusUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	cursorStyle   = lipgloss.NewStyle().Bold(true).Reverse(true)
+	nameRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	nameDown    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	nameUnknown = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	nameFailed  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	cursorStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
 )
 
 type serviceListModel struct {
@@ -35,21 +37,52 @@ func (m *serviceListModel) Selected() string {
 }
 
 func (m *serviceListModel) Up() {
+	if len(m.services) == 0 {
+		return
+	}
 	if m.cursor > 0 {
 		m.cursor--
-		if m.cursor < m.offset {
-			m.offset = m.cursor
-		}
+	} else {
+		m.cursor = len(m.services) - 1
 	}
+	m.fixOffset()
 }
 
 func (m *serviceListModel) Down() {
+	if len(m.services) == 0 {
+		return
+	}
 	if m.cursor < len(m.services)-1 {
 		m.cursor++
-		visible := m.height - 2 // border
-		if m.cursor >= m.offset+visible {
-			m.offset = m.cursor - visible + 1
-		}
+	} else {
+		m.cursor = 0
+	}
+	m.fixOffset()
+}
+
+func (m *serviceListModel) GoTop() {
+	m.cursor = 0
+	m.offset = 0
+}
+
+func (m *serviceListModel) GoBottom() {
+	if len(m.services) == 0 {
+		return
+	}
+	m.cursor = len(m.services) - 1
+	m.fixOffset()
+}
+
+func (m *serviceListModel) fixOffset() {
+	visible := m.height - 2 // border
+	if visible < 1 {
+		return
+	}
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+visible {
+		m.offset = m.cursor - visible + 1
 	}
 }
 
@@ -67,12 +100,17 @@ func (m *serviceListModel) View(focused bool) string {
 
 	for i := m.offset; i < end; i++ {
 		svc := m.services[i]
-		dot := statusDot(svc.Status)
-		name := fmt.Sprintf("%-*s %s", m.width-12, svc.Name, svc.Status)
+		line := fmt.Sprintf("%-*s", m.width-4, svc.Name)
+
 		if i == m.cursor {
-			name = cursorStyle.Render(name)
+			line = cursorStyle.Render(line)
+		} else if !svc.Enabled {
+			line = dimStyle.Render(line)
+		} else {
+			line = nameStyle(svc.Status).Render(line)
 		}
-		lines = append(lines, dot+" "+name)
+
+		lines = append(lines, line)
 	}
 
 	// Pad remaining lines
@@ -82,29 +120,18 @@ func (m *serviceListModel) View(focused bool) string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	border := lipgloss.NormalBorder()
-	style := lipgloss.NewStyle().
-		Border(border).
-		Width(m.width - 2).
-		Height(visible).
-		BorderForeground(lipgloss.Color("8"))
-
-	if focused {
-		style = style.BorderForeground(lipgloss.Color("4"))
-	}
-
-	return style.Render(content)
+	return renderPanel(content, m.width, m.height, "services", focused)
 }
 
-func statusDot(status core.Status) string {
+func nameStyle(status core.Status) lipgloss.Style {
 	switch status {
 	case "running", "active":
-		return statusRunning.Render("●")
-	case "down", "inactive":
-		return statusDown.Render("●")
+		return nameRunning
+	case "down", "inactive", "disabled":
+		return nameDown
 	case "failed":
-		return statusDown.Bold(true).Render("●")
+		return nameFailed
 	default:
-		return statusUnknown.Render("●")
+		return nameUnknown
 	}
 }

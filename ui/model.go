@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	listWidth    = 35
+	leftWidth       = 35
+	detailHeight    = 11
 	refreshInterval = 2 * time.Second
-	maxLogSize   = 64 * 1024
+	maxLogSize      = 64 * 1024
 )
 
 type panel int
@@ -38,6 +39,7 @@ type tickMsg time.Time
 
 type model struct {
 	manager     core.ServiceManager
+	detail      detailModel
 	serviceList serviceListModel
 	logViewer   logViewerModel
 	activePanel panel
@@ -61,8 +63,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.serviceList.SetSize(listWidth, m.height)
-		m.logViewer.SetSize(m.width-listWidth, m.height)
+		m.resize()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -78,11 +79,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.activePanel == panelList {
+		switch m.activePanel {
+		case panelList:
 			return m.updateList(msg)
+		case panelLogs:
+			cmd := m.logViewer.Update(msg)
+			return m, cmd
 		}
-		cmd := m.logViewer.Update(msg)
-		return m, cmd
+		return m, nil
 
 	case servicesLoadedMsg:
 		if msg.err == nil {
@@ -90,6 +94,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.serviceList.cursor >= len(msg.services) {
 				m.serviceList.cursor = max(0, len(msg.services)-1)
 			}
+			m.updateDetail()
 		}
 		return m, nil
 
@@ -102,18 +107,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(loadServicesCmd(m.manager), tickCmd())
+		cmds := []tea.Cmd{loadServicesCmd(m.manager), tickCmd()}
+		if m.logViewer.serviceName != "" {
+			cmds = append(cmds, loadLogsCmd(m.manager, m.logViewer.serviceName))
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	return m, nil
+}
+
+func (m *model) resize() {
+	panelHeight := m.height - 1 // help bar
+	m.detail.SetSize(leftWidth, detailHeight)
+	m.serviceList.SetSize(leftWidth, panelHeight-detailHeight)
+	m.logViewer.SetSize(m.width-leftWidth, panelHeight)
+}
+
+func (m *model) updateDetail() {
+	if len(m.serviceList.services) > 0 && m.serviceList.cursor < len(m.serviceList.services) {
+		svc := m.serviceList.services[m.serviceList.cursor]
+		m.detail.SetService(&svc)
+	} else {
+		m.detail.SetService(nil)
+	}
 }
 
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
 		m.serviceList.Down()
+		m.updateDetail()
 	case "k", "up":
 		m.serviceList.Up()
+		m.updateDetail()
+	case "g":
+		m.serviceList.GoTop()
+		m.updateDetail()
+	case "G":
+		m.serviceList.GoBottom()
+		m.updateDetail()
 	case "enter":
 		if name := m.serviceList.Selected(); name != "" {
 			return m, loadLogsCmd(m.manager, name)
@@ -126,17 +159,52 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name := m.serviceList.Selected(); name != "" {
 			return m, stopServiceCmd(m.manager, name)
 		}
+	case "e":
+		if name := m.serviceList.Selected(); name != "" {
+			return m, enableServiceCmd(m.manager, name)
+		}
+	case "d":
+		if name := m.serviceList.Selected(); name != "" {
+			return m, disableServiceCmd(m.manager, name)
+		}
 	}
 	return m, nil
 }
+
+var (
+	helpKeyStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
+	helpDescStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+)
 
 func (m model) View() string {
 	if m.width == 0 {
 		return "loading..."
 	}
-	left := m.serviceList.View(m.activePanel == panelList)
-	right := m.logViewer.View(m.activePanel == panelLogs)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+
+	detail := m.detail.View(false)
+	list := m.serviceList.View(m.activePanel == panelList)
+	logs := m.logViewer.View(m.activePanel == panelLogs)
+
+	leftCol := lipgloss.JoinVertical(lipgloss.Left, detail, list)
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, logs)
+
+	var help string
+	if m.activePanel == panelList {
+		help = helpKeyStyle.Render("j/k") + helpDescStyle.Render(" navigate  ") +
+			helpKeyStyle.Render("g/G") + helpDescStyle.Render(" top/bottom  ") +
+			helpKeyStyle.Render("enter") + helpDescStyle.Render(" logs  ") +
+			helpKeyStyle.Render("s") + helpDescStyle.Render(" start  ") +
+			helpKeyStyle.Render("x") + helpDescStyle.Render(" stop  ") +
+			helpKeyStyle.Render("e") + helpDescStyle.Render(" enable  ") +
+			helpKeyStyle.Render("d") + helpDescStyle.Render(" disable  ")
+	} else {
+		help = helpKeyStyle.Render("j/k") + helpDescStyle.Render(" scroll  ") +
+			helpKeyStyle.Render("g/G") + helpDescStyle.Render(" top/bottom  ")
+	}
+	help += helpKeyStyle.Render("tab") + helpDescStyle.Render(" switch panel  ") +
+		helpKeyStyle.Render("q") + helpDescStyle.Render(" quit")
+
+	return panels + "\n" + help
 }
 
 // Commands
@@ -176,6 +244,22 @@ func startServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
 func stopServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
 	return func() tea.Msg {
 		mgr.Stop(name)
+		services, err := mgr.List()
+		return servicesLoadedMsg{services: services, err: err}
+	}
+}
+
+func enableServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
+	return func() tea.Msg {
+		mgr.Enable(name)
+		services, err := mgr.List()
+		return servicesLoadedMsg{services: services, err: err}
+	}
+}
+
+func disableServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
+	return func() tea.Msg {
+		mgr.Disable(name)
 		services, err := mgr.List()
 		return servicesLoadedMsg{services: services, err: err}
 	}

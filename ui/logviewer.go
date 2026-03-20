@@ -3,7 +3,6 @@ package ui
 import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type logViewerModel struct {
@@ -21,28 +20,35 @@ func (m *logViewerModel) SetSize(w, h int) {
 }
 
 func (m *logViewerModel) SetContent(name, content string) {
+	newService := m.serviceName != name
 	m.serviceName = name
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(content)
-	m.viewport.GotoBottom()
+	if newService || atBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *logViewerModel) Update(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "g":
+			m.viewport.GotoTop()
+			return nil
+		case "G":
+			m.viewport.GotoBottom()
+			return nil
+		}
+	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return cmd
 }
 
 func (m *logViewerModel) View(focused bool) string {
-	border := lipgloss.NormalBorder()
-	style := lipgloss.NewStyle().
-		Border(border).
-		Width(m.width - 2).
-		Height(m.height - 2).
-		BorderForeground(lipgloss.Color("8"))
-
-	if focused {
-		style = style.BorderForeground(lipgloss.Color("4"))
+	title := "logs"
+	if m.serviceName != "" {
+		title = "logs: " + m.serviceName
 	}
-
-	return style.Render(m.viewport.View())
+	return renderPanel(m.viewport.View(), m.width, m.height, title, focused)
 }

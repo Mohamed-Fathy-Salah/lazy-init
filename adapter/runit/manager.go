@@ -9,41 +9,70 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
-const serviceDir = "/var/service"
+const (
+	serviceDir  = "/var/service"
+	availableDir = "/etc/sv"
+)
 
 type manager struct{}
 
 // List implements [core.ServiceManager].
 func (m *manager) List() ([]core.Service, error) {
-	entries, err := os.ReadDir(serviceDir)
+	// Collect enabled services (in /var/service/)
+	enabled := map[string]bool{}
+	enabledEntries, err := os.ReadDir(serviceDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading service directory: %w", err)
 	}
+	for _, e := range enabledEntries {
+		enabled[e.Name()] = true
+	}
+
+	// Collect all available services (in /etc/sv/)
+	allEntries, err := os.ReadDir(availableDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading available services: %w", err)
+	}
 
 	var services []core.Service
-	for _, entry := range entries {
+	for _, entry := range allEntries {
 		name := entry.Name()
-		status := statusFor(name)
-		services = append(services, core.Service{
-			Name:   name,
-			Status: status,
-		})
+		svc := core.Service{
+			Name:    name,
+			Enabled: enabled[name],
+		}
+		if svc.Enabled {
+			parseStatus(&svc)
+		} else {
+			svc.Status = "disabled"
+		}
+		svc.Command = readCommand(name)
+		services = append(services, svc)
 	}
 	return services, nil
 }
 
 // Logs implements [core.ServiceManager].
 func (m *manager) Logs(name string) (io.Reader, error) {
-	logDir := filepath.Join(serviceDir, name, "log", "main")
-	currentLog := filepath.Join(logDir, "current")
-	f, err := os.Open(currentLog)
-	if err != nil {
-		return nil, fmt.Errorf("opening log for %s: %w", name, err)
+	paths := []string{
+		filepath.Join(serviceDir, name, "log", "main", "current"),       // svlogd direct
+		filepath.Join("/var/log/socklog/everything", "current"),          // socklog everything
+		filepath.Join("/var/log/socklog/daemon", "current"),              // socklog daemon facility
+		filepath.Join("/var/log", name),                                  // /var/log/<service>
+		filepath.Join("/var/log", name+".log"),                           // /var/log/<service>.log
 	}
-	return f, nil
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err == nil {
+			return f, nil
+		}
+	}
+	return nil, fmt.Errorf("no logs found for %s\n\nservices use vlogger which sends to syslog.\ninstall socklog-void to enable log collection:\n\n  sudo xbps-install -S socklog-void\n  sudo ln -s /etc/sv/socklog-unix /var/service/\n  sudo ln -s /etc/sv/nanoklogd /var/service/", name)
 }
 
 // Start implements [core.ServiceManager].
@@ -56,26 +85,94 @@ func (m *manager) Stop(name string) error {
 	return sv("stop", name)
 }
 
-func sv(command, name string) error {
-	cmd := exec.Command("sv", command, filepath.Join(serviceDir, name))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// Enable implements [core.ServiceManager].
+func (m *manager) Enable(name string) error {
+	src := filepath.Join(availableDir, name)
+	dst := filepath.Join(serviceDir, name)
+	return os.Symlink(src, dst)
 }
 
-func statusFor(name string) core.Status {
-	out, err := exec.Command("sv", "status", filepath.Join(serviceDir, name)).CombinedOutput()
+// Disable implements [core.ServiceManager].
+func (m *manager) Disable(name string) error {
+	return os.Remove(filepath.Join(serviceDir, name))
+}
+
+func sv(command, name string) error {
+	return exec.Command("sv", command, filepath.Join(serviceDir, name)).Run()
+}
+
+// parseStatus parses "sv status" output like:
+//   run: /var/service/sshd: (pid 763) 3156s; run: log: (pid 761) 3156s
+//   down: /var/service/dunst: 1s, normally up, want up
+func parseStatus(svc *core.Service) {
+	out, err := exec.Command("sv", "status", filepath.Join(serviceDir, svc.Name)).CombinedOutput()
 	if err != nil {
-		return "unknown"
+		svc.Status = "unknown"
+		return
 	}
 	line := strings.TrimSpace(string(out))
+
 	if strings.HasPrefix(line, "run:") {
-		return "running"
+		svc.Status = "running"
+	} else if strings.HasPrefix(line, "down:") {
+		svc.Status = "down"
+	} else {
+		svc.Status = "unknown"
 	}
-	if strings.HasPrefix(line, "down:") {
-		return "down"
+
+	// Parse PID: (pid 763)
+	if start := strings.Index(line, "(pid "); start != -1 {
+		rest := line[start+5:]
+		if end := strings.Index(rest, ")"); end != -1 {
+			if pid, err := strconv.Atoi(rest[:end]); err == nil {
+				svc.PID = pid
+			}
+		}
 	}
-	return "unknown"
+
+	// Parse uptime: number followed by 's' after pid or after colon for down
+	if start := strings.Index(line, ") "); start != -1 {
+		rest := line[start+2:]
+		if end := strings.Index(rest, "s"); end != -1 {
+			if secs, err := strconv.Atoi(rest[:end]); err == nil {
+				svc.Uptime = time.Duration(secs) * time.Second
+			}
+		}
+	} else {
+		// down services: "down: /var/service/x: 1s, ..."
+		parts := strings.SplitN(line, ": ", 3)
+		if len(parts) == 3 {
+			rest := parts[2]
+			if end := strings.Index(rest, "s"); end != -1 {
+				if secs, err := strconv.Atoi(rest[:end]); err == nil {
+					svc.Uptime = time.Duration(secs) * time.Second
+				}
+			}
+		}
+	}
+
+	// Parse extra info after semicolon or comma
+	if idx := strings.Index(line, ", "); idx != -1 {
+		svc.Extra = strings.TrimSpace(line[idx+2:])
+	} else if idx := strings.Index(line, "; "); idx != -1 {
+		svc.Extra = strings.TrimSpace(line[idx+2:])
+	}
+}
+
+func readCommand(name string) string {
+	runFile := filepath.Join(availableDir, name, "run")
+	data, err := os.ReadFile(runFile)
+	if err != nil {
+		return ""
+	}
+	// Find the exec line
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "exec ") {
+			return strings.TrimPrefix(line, "exec ")
+		}
+	}
+	return ""
 }
 
 func New() core.ServiceManager {
