@@ -2,23 +2,7 @@
 
 A lazygit-style TUI for managing init system services.
 
-```
-╭─ detail ────────────╮╭─ logs: sshd ────────────────╮
-│ Name:    sshd        ││ 2026-03-20 ...              │
-│ Status:  running     ││ 2026-03-20 ...              │
-│ Enabled: yes         ││ 2026-03-20 ...              │
-│ PID:     763         ││                             │
-│ Uptime:  52m 30s     ││                             │
-│ Command: /usr/bin/.. ││                             │
-╰──────────────────────╯│                             │
-╭─ services ───────────╮│                             │
-│ sshd                 ││                             │
-│ docker               ││                             │
-│ earlyoom             ││                             │
-│ ...                  ││                             │
-╰──────────────────────╯╰─────────────────────────────╯
- j/k navigate  g/G top/bottom  enter logs  tab switch panel  q quit
-```
+![lazy-init](assets/image1.png)
 
 Services are colored by status: green (running), red (down), dim (disabled).
 
