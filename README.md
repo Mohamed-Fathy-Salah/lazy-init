@@ -8,18 +8,33 @@ Services are colored by status: green (running), red (down), dim (disabled).
 
 ## Build
 
-```sh
-# for runit systems
-go build -tags runit -o lazy-init ./cmd/lazy-init/
+Requires Go 1.25+.
 
-# for systemd systems
-go build -tags systemd -o lazy-init ./cmd/lazy-init/
+```sh
+make            # auto-detects init system
+make INIT=runit # force runit
+make INIT=systemd # force systemd
+```
+
+Or build manually:
+
+```sh
+go build -tags runit -o lazyinit ./cmd/lazy-init/
+go build -tags systemd -o lazyinit ./cmd/lazy-init/
+```
+
+## Install
+
+```sh
+sudo make install          # installs to /usr/local/bin/
+sudo make install PREFIX=/usr  # installs to /usr/bin/
+sudo make uninstall        # removes the binary
 ```
 
 ## Usage
 
 ```sh
-sudo ./lazy-init
+sudo lazyinit
 ```
 
 Root is required to read service status and control services.
