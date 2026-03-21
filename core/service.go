@@ -24,4 +24,7 @@ type ServiceManager interface {
     Enable(name string) error
     Disable(name string) error
     Logs(name string) (io.Reader, error)
+    Create(name string) error
+    Remove(name string) error
+    EditFile(name string) (string, error) // returns path to the editable service file
 }

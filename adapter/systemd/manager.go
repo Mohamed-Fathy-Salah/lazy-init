@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"lazy-init/core"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -120,6 +121,54 @@ func parseProps(svc *core.Service) {
 			}
 		}
 	}
+}
+
+// Create implements [core.ServiceManager].
+func (m *manager) Create(name string) error {
+	unit := fmt.Sprintf(`[Unit]
+Description=%s
+
+[Service]
+ExecStart=/usr/bin/%s
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+`, name, name)
+
+	path := "/etc/systemd/system/" + name + ".service"
+	if err := os.WriteFile(path, []byte(unit), 0644); err != nil {
+		return fmt.Errorf("writing unit file: %w", err)
+	}
+	return exec.Command("systemctl", "daemon-reload").Run()
+}
+
+// Remove implements [core.ServiceManager].
+func (m *manager) Remove(name string) error {
+	_ = exec.Command("systemctl", "stop", name).Run()
+	_ = exec.Command("systemctl", "disable", name).Run()
+
+	path := "/etc/systemd/system/" + name + ".service"
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("removing unit file: %w", err)
+	}
+	return exec.Command("systemctl", "daemon-reload").Run()
+}
+
+// EditFile implements [core.ServiceManager].
+func (m *manager) EditFile(name string) (string, error) {
+	// Check custom unit first, then system
+	paths := []string{
+		"/etc/systemd/system/" + name + ".service",
+		"/usr/lib/systemd/system/" + name + ".service",
+		"/lib/systemd/system/" + name + ".service",
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("unit file not found for %s", name)
 }
 
 func New() core.ServiceManager {

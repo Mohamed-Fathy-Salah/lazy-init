@@ -3,6 +3,8 @@ package ui
 import (
 	"io"
 	"lazy-init/core"
+	"os"
+	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,11 +39,15 @@ type logsLoadedMsg struct {
 
 type tickMsg time.Time
 
+// Message returned after editor exits
+type editorFinishedMsg struct{ err error }
+
 type model struct {
 	manager     core.ServiceManager
 	detail      detailModel
 	serviceList serviceListModel
 	logViewer   logViewerModel
+	prompt      promptModel
 	activePanel panel
 	width       int
 	height      int
@@ -51,6 +57,7 @@ func newModel(mgr core.ServiceManager) model {
 	return model{
 		manager:     mgr,
 		activePanel: panelList,
+		prompt:      newPrompt(),
 	}
 }
 
@@ -67,6 +74,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle prompt input first
+		if m.prompt.Active() {
+			return m.updatePrompt(msg)
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -87,6 +99,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case editorFinishedMsg:
+		return m, loadServicesCmd(m.manager)
 
 	case servicesLoadedMsg:
 		if msg.err == nil {
@@ -133,6 +148,33 @@ func (m *model) updateDetail() {
 	}
 }
 
+func (m model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.prompt.Cancel()
+		return m, nil
+	case "enter":
+		kind, val := m.prompt.Submit()
+		switch kind {
+		case promptAddName:
+			if val == "" {
+				return m, nil
+			}
+			return m, createAndEditCmd(m.manager, val)
+		case promptConfirmRemove:
+			if val == "y" || val == "Y" || val == "yes" {
+				name := m.prompt.value
+				m.prompt.value = ""
+				return m, removeServiceCmd(m.manager, name)
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+	cmd := m.prompt.Update(msg)
+	return m, cmd
+}
+
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
@@ -167,6 +209,19 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name := m.serviceList.Selected(); name != "" {
 			return m, disableServiceCmd(m.manager, name)
 		}
+	case "a":
+		m.prompt.Start(promptAddName, "New service name:", "my-service")
+		return m, nil
+	case "r":
+		if name := m.serviceList.Selected(); name != "" {
+			m.prompt.value = name
+			m.prompt.Start(promptConfirmRemove, "Remove "+name+"? (y/n)", "")
+			return m, nil
+		}
+	case "E":
+		if name := m.serviceList.Selected(); name != "" {
+			return m, editServiceCmd(m.manager, name)
+		}
 	}
 	return m, nil
 }
@@ -189,6 +244,12 @@ func (m model) View() string {
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, logs)
 
 	var help string
+	if m.prompt.Active() {
+		help = helpKeyStyle.Render("enter") + helpDescStyle.Render(" confirm  ") +
+			helpKeyStyle.Render("esc") + helpDescStyle.Render(" cancel")
+		return panels + "\n" + m.prompt.View(m.width) + "\n" + help
+	}
+
 	if m.activePanel == panelList {
 		help = helpKeyStyle.Render("j/k") + helpDescStyle.Render(" navigate  ") +
 			helpKeyStyle.Render("g/G") + helpDescStyle.Render(" top/bottom  ") +
@@ -196,7 +257,10 @@ func (m model) View() string {
 			helpKeyStyle.Render("s") + helpDescStyle.Render(" start  ") +
 			helpKeyStyle.Render("x") + helpDescStyle.Render(" stop  ") +
 			helpKeyStyle.Render("e") + helpDescStyle.Render(" enable  ") +
-			helpKeyStyle.Render("d") + helpDescStyle.Render(" disable  ")
+			helpKeyStyle.Render("d") + helpDescStyle.Render(" disable  ") +
+			helpKeyStyle.Render("a") + helpDescStyle.Render(" add  ") +
+			helpKeyStyle.Render("r") + helpDescStyle.Render(" remove  ") +
+			helpKeyStyle.Render("E") + helpDescStyle.Render(" edit  ")
 	} else {
 		help = helpKeyStyle.Render("j/k") + helpDescStyle.Render(" scroll  ") +
 			helpKeyStyle.Render("g/G") + helpDescStyle.Render(" top/bottom  ")
@@ -263,6 +327,39 @@ func disableServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
 		services, err := mgr.List()
 		return servicesLoadedMsg{services: services, err: err}
 	}
+}
+
+func createAndEditCmd(mgr core.ServiceManager, name string) tea.Cmd {
+	if err := mgr.Create(name); err != nil {
+		return nil
+	}
+	return editServiceCmd(mgr, name)
+}
+
+func removeServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
+	return func() tea.Msg {
+		mgr.Remove(name)
+		services, err := mgr.List()
+		return servicesLoadedMsg{services: services, err: err}
+	}
+}
+
+func editServiceCmd(mgr core.ServiceManager, name string) tea.Cmd {
+	path, err := mgr.EditFile(name)
+	if err != nil {
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	c := exec.Command(editor, path)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorFinishedMsg{err: err}
+	})
 }
 
 func tickCmd() tea.Cmd {

@@ -54,6 +54,9 @@ Root is required to read service status and control services.
 | `x` | Stop service |
 | `e` | Enable service (start on boot) |
 | `d` | Disable service |
+| `a` | Add a new service (prompts for name, opens editor) |
+| `r` | Remove selected service (with confirmation) |
+| `E` | Edit service file in `$EDITOR` |
 
 ### Logs panel
 
@@ -85,6 +88,12 @@ The detail panel shows information about the selected service:
 
 The service list and detail panel auto-refresh every 2 seconds. Logs live-tail when scrolled to the bottom.
 
+## Service Management
+
+- **Add** (`a`) - prompts for a service name, creates a template service file, then opens it in `$EDITOR` for you to fill in the command (runit: `/etc/sv/<name>/run` + log script, systemd: `/etc/systemd/system/<name>.service`)
+- **Remove** (`r`) - stops and disables the service, then deletes its files
+- **Edit** (`E`) - opens the service file in your `$EDITOR` (defaults to `vi`), then refreshes the service list on return
+
 ## Supported Init Systems
 
 - **runit** - reads from `/etc/sv` (available) and `/var/service` (enabled), uses `sv` for control
@@ -94,3 +103,4 @@ The service list and detail panel auto-refresh every 2 seconds. Logs live-tail w
 
 1. Create `adapter/<name>/manager.go` with a build tag, implementing `core.ServiceManager`
 2. Create `cmd/lazy-init/<name>.go` with the same build tag, providing `newManager()`
+3. Add the init system detection to the `Makefile` `INIT` auto-detection line

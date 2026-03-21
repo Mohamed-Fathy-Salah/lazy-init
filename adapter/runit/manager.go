@@ -175,6 +175,56 @@ func readCommand(name string) string {
 	return ""
 }
 
+// Create implements [core.ServiceManager].
+func (m *manager) Create(name string) error {
+	svcDir := filepath.Join(availableDir, name)
+	logDir := filepath.Join(svcDir, "log")
+
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("creating service directory: %w", err)
+	}
+
+	runScript := fmt.Sprintf("#!/bin/sh\nexec 2>&1\nexec chpst -u root %s\n", name)
+	if err := os.WriteFile(filepath.Join(svcDir, "run"), []byte(runScript), 0755); err != nil {
+		return fmt.Errorf("writing run script: %w", err)
+	}
+
+	logScript := fmt.Sprintf("#!/bin/sh\nexec vlogger -t %s -p daemon\n", name)
+	if err := os.WriteFile(filepath.Join(logDir, "run"), []byte(logScript), 0755); err != nil {
+		return fmt.Errorf("writing log script: %w", err)
+	}
+
+	return nil
+}
+
+// Remove implements [core.ServiceManager].
+func (m *manager) Remove(name string) error {
+	// Disable first if enabled
+	link := filepath.Join(serviceDir, name)
+	if _, err := os.Lstat(link); err == nil {
+		// Stop the service before removing
+		_ = sv("stop", name)
+		if err := os.Remove(link); err != nil {
+			return fmt.Errorf("disabling service: %w", err)
+		}
+	}
+
+	svcDir := filepath.Join(availableDir, name)
+	if err := os.RemoveAll(svcDir); err != nil {
+		return fmt.Errorf("removing service directory: %w", err)
+	}
+	return nil
+}
+
+// EditFile implements [core.ServiceManager].
+func (m *manager) EditFile(name string) (string, error) {
+	path := filepath.Join(availableDir, name, "run")
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("service file not found: %w", err)
+	}
+	return path, nil
+}
+
 func New() core.ServiceManager {
 	return &manager{}
 }
