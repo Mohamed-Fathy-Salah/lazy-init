@@ -58,6 +58,7 @@ func newModel(mgr core.ServiceManager) model {
 		manager:     mgr,
 		activePanel: panelList,
 		prompt:      newPrompt(),
+		serviceList: newServiceList(),
 	}
 }
 
@@ -77,6 +78,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle prompt input first
 		if m.prompt.Active() {
 			return m.updatePrompt(msg)
+		}
+
+		// Handle filter input
+		if m.serviceList.Filtering() {
+			return m.updateFilter(msg)
 		}
 
 		switch msg.String() {
@@ -105,10 +111,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case servicesLoadedMsg:
 		if msg.err == nil {
-			m.serviceList.services = msg.services
-			if m.serviceList.cursor >= len(msg.services) {
-				m.serviceList.cursor = max(0, len(msg.services)-1)
-			}
+			m.serviceList.SetServices(msg.services)
 			m.updateDetail()
 		}
 		return m, nil
@@ -140,8 +143,8 @@ func (m *model) resize() {
 }
 
 func (m *model) updateDetail() {
-	if len(m.serviceList.services) > 0 && m.serviceList.cursor < len(m.serviceList.services) {
-		svc := m.serviceList.services[m.serviceList.cursor]
+	if len(m.serviceList.filtered) > 0 && m.serviceList.cursor < len(m.serviceList.filtered) {
+		svc := m.serviceList.filtered[m.serviceList.cursor]
 		m.detail.SetService(&svc)
 	} else {
 		m.detail.SetService(nil)
@@ -175,8 +178,35 @@ func (m model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.serviceList.StopFilter(true)
+		m.updateDetail()
+		return m, nil
+	case "enter":
+		m.serviceList.StopFilter(false)
+		m.updateDetail()
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	cmd := m.serviceList.UpdateFilter(msg)
+	m.updateDetail()
+	return m, cmd
+}
+
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "/":
+		m.serviceList.StartFilter()
+		return m, nil
+	case "esc":
+		if m.serviceList.filter.Value() != "" {
+			m.serviceList.StopFilter(true)
+			m.updateDetail()
+		}
+		return m, nil
 	case "j", "down":
 		m.serviceList.Down()
 		m.updateDetail()
@@ -250,9 +280,17 @@ func (m model) View() string {
 		return panels + "\n" + m.prompt.View(m.width) + "\n" + help
 	}
 
+	if m.serviceList.Filtering() {
+		help = helpKeyStyle.Render("type") + helpDescStyle.Render(" filter  ") +
+			helpKeyStyle.Render("enter") + helpDescStyle.Render(" confirm  ") +
+			helpKeyStyle.Render("esc") + helpDescStyle.Render(" clear")
+		return panels + "\n" + help
+	}
+
 	if m.activePanel == panelList {
 		help = helpKeyStyle.Render("j/k") + helpDescStyle.Render(" navigate  ") +
 			helpKeyStyle.Render("g/G") + helpDescStyle.Render(" top/bottom  ") +
+			helpKeyStyle.Render("/") + helpDescStyle.Render(" filter  ") +
 			helpKeyStyle.Render("enter") + helpDescStyle.Render(" logs  ") +
 			helpKeyStyle.Render("s") + helpDescStyle.Render(" start  ") +
 			helpKeyStyle.Render("x") + helpDescStyle.Render(" stop  ") +
